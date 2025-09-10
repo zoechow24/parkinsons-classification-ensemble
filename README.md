@@ -19,7 +19,7 @@ The following data was provided and was loaded using their URLs:
 * R
 * RStudio
 
-### Dependencies
+### Dependencies:
 This project uses the following packages:
 * dplyr
 * ggplot2
