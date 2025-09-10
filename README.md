@@ -39,8 +39,7 @@ The following data was provided and was loaded using their URLs:
    * Predict validation set
 
   ## Results
-  The final predictions were saved in the  `Parkinsons.Predictions.csv` file which consists of the _PatientID_ and _Diagnosis_. The full analysis and report could be found [here](https://zoechow24.github.io/parkinsons-classification-ensemble/Parkinson_Classification.html/).
-
+  The final predictions were saved in the  `Parkinsons.Predictions.csv` file which consists of the _PatientID_ and _Diagnosis_. The full analysis and report could be found [here](https://zoechow24.github.io/parkinsons-classification-ensemble/Parkinson_Classification.html).
 
 
 
