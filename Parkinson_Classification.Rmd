@@ -1,0 +1,583 @@
+---
+title: "Parkinson's Classification Ensemble"
+author: "Zoe Chow"
+date: "Summer 2025"
+output:
+  html_document:
+    df_print: paged
+subtitle: DA5030 / Decision Tree & Logistic Regression Classification
+---
+#### _The goal of this project is to develop an ensemble model that combines a random forest and a logistic regression classifier to predict Parkinson's disease diagnoses based on patients' medical histories._
+
+## Load Packages and CSV
+```{r LoadPackages, echo=T, warning=F, message=F}
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(knitr)
+library(caret)
+library(randomForest)
+```
+
+```{r LoadCSV, echo=T}
+train_url <- "https://s3.us-east-2.amazonaws.com/artificium.us/datasets/parkinsons-diagnostic-data.csv"
+
+train_df <- read.csv(train_url, stringsAsFactors = F, header = T)
+```
+
+
+## Data Preparation
+To prepare the data for random forest and logistic regression modeling, we will begin by examining the dataset and removing any irrelevant or unnecessary features. Next, we will apply appropriate transformations and assessments to ensure the data is well-suited for both model types. Finally, we will split the data into training and testing sets to support effective model development and evaluation.
+
+### Exploratory Data Analysis (EDA)
+```{r head}
+head(train_df)
+```
+
+```{r structure}
+str(train_df)
+```
+
+```{r InspectData}
+summary(train_df)
+```
+
+Random forest and logistic regression process data differently. While random forests are robust to noisy data and unscaled features, logistic regression is more sensitive to such issues and therefore requires cleaner, scaled input. As a result, different preprocessing transformations are necessary for each algorithm.
+
+However, to properly build an ensemble model combining both algorithms, it is essential that all models are trained on the same set of samples. This means the datasets used for training must contain the same rows, even if feature transformations differ.
+
+To prepare the data, I will first remove the `Ethnicity` column because it contains only missing values. The `PatientID` column will also be removed, as it is merely an identifier and does not contribute to the diagnosis. I will drop the 4 rows with missing values in the `SleepQuality` column, which account for only about `r round(4/nrow(train_df)*100,2)`% of the data — a negligible amount.
+
+Finally, I will apply model-specific transformations to  ensure that each model is optimized for its algorithmic characteristics, while still allowing them to be combined effectively in an ensemble.
+
+### Remove NAs and identifiers
+```{r remove}
+clean.train_df <- train_df %>%
+  select(-Ethnicity, -PatientID) %>%
+  filter(!is.na(SleepQuality))
+str(clean.train_df)
+```
+The rows with missing data and the columns `PatientID` and `Ethnicity` were properly removed.
+
+### Transformations for Random Forest
+Aside from converting categorical variables to factors, no additional transformations—such as scaling or one-hot encoding—are required for training random forest models in R. The categorical variables in the dataset include `Gender`, `EducationalLevel`, `Smoking`, `FamilyHistoryParkinsons`, `TraumaticBrainInjury`, `Hypertension`, `Diabetes`, `Depression`, `Stroke`, `Tremor`, `Rigidity`, `Bradykinesia`, `PosturalInstability`, `SpeechProbelms`, `SleepDisorders`, `Constipation`, and `Diagnosis.`
+
+Although `EducationalLevel` may not appear to be directly related to the target variable Diagnosis, we retain it in the dataset as it could still carry relevant information—such as correlations with age, lifestyle, or stress levels—that may contribute to predictive performance.
+
+```{r rf_cat}
+rf_df <- clean.train_df %>%
+  mutate(across(c(Gender, EducationLevel, Smoking,
+                  FamilyHistoryParkinsons, TraumaticBrainInjury,
+                  Hypertension, Diabetes, Depression, Stroke, Tremor,
+                  Rigidity, Bradykinesia, PosturalInstability, 
+                  SpeechProblems, SleepDisorders, Constipation, Diagnosis), 
+                as.factor))
+str(rf_df)
+```
+After converting the categorical features into factors, we observe that the `Gender` column contains only a single class: "Female". Since it lacks variability, this feature does not provide any useful information for modeling and will be removed from the datasets used to train both the random forest and logistic regression models.
+
+```{r removeGender}
+rf_df <- rf_df %>% select(-Gender) # safer than rf_df[,-2]
+clean.train_df <- clean.train_df %>% select(-Gender)  # for logistic regression later
+```
+
+
+### Transformations for Logistic Regression
+Logistic regression models are sensitive to noisy data and non-numeric features. Therefore, we will handle outliers and encode categorical variables appropriately. Additionally, we will visualize the data to assess whether the numeric features follow a normal distribution. If they do not, we will consider applying log or square root transformations to improve their distribution and potentially enhance model performance. Finally, we will examine multicollinearity to ensure the model does not include redundant predictors, thereby maintaining both stability and interpretability.
+
+#### Outliers
+```{r outliers}
+outliers <- function(df) {
+  outliers <- c()
+  for (col in 1:ncol(df)) {
+    m <- mean(df[[col]], na.rm = TRUE)
+    s <- sd(df[[col]], na.rm = TRUE)
+    
+    # Compute z-scores and find outliers
+    z_scores <- abs((df[[col]] - m) / s)
+    outlierRows <- which(z_scores > 3.0)
+    
+    # append outlier row to a list 
+    outliers <- c(outliers, outlierRows)
+    
+    # Print results
+    col_name <- colnames(df)[col]
+    if (length(outlierRows) > 0) {
+      cat("Found outliers in column '", col_name, "':\n", sep = "")
+      cat("   --> ", df[outlierRows,col], "\n\n")
+    } else {
+      cat("No outliers found in column '", col_name, "'\n", sep = "")
+    }
+  }
+  
+}
+numeric_features <- names(rf_df)[sapply(rf_df, is.numeric)]
+numeric_df <- rf_df[,numeric_features]
+outliers <- outliers(numeric_df)
+```
+There are only two outliers in the CholesterolTriglycerides column. These values are similar to one another and, as they represent valid medical measurements, they are likely to reflect true patient conditions. Therefore, we will retain these values and will not apply imputation or transformation.
+
+#### Visualize Distribution
+##### Target: `Diagnosis`
+```{r targetDist, fig.dim=c(5,3), fig.align='center'}
+target <- 'Diagnosis'
+# Plot distribution of the target variable (class label)
+ggplot(clean.train_df, aes(x = .data[[target]])) +
+  geom_bar(fill = "steelblue") +
+  labs(title = paste("Distribution of Target Variable:", target),
+       x = target, y = "Count") +
+  theme_minimal()
+target_dist <- table(clean.train_df$Diagnosis)
+neg_per <- round(target_dist[1]/nrow(clean.train_df)*100,)
+pos_per <- round(target_dist[2]/nrow(clean.train_df)*100,)
+```
+The graph above indicates a mild case of class imbalance. Class `0` (negative diagnosis) accounts for `r neg_per`% of the dataset, while class `1` (positive diagnosis) represents `r pos_per`%. This `r neg_per`:`r pos_per` split suggests a mild imbalance that should be considered when evaluating model performance, particularly with metrics such as the F1-score.
+
+##### Numeric Features
+```{r num, fig.align='default', fig.dim=c(4,2)}
+numeric_features <- names(rf_df)[sapply(rf_df, is.numeric)] # use rf_df bc num categorical has been factorized. For LR, they need to stay as num
+# Plot numeric features using histograms (grouped by class label)
+numericDist <- function (df, numeric_features, target, type=NULL){
+  for (feature in numeric_features) {
+    print(
+      ggplot(df, aes(x = .data[[feature]], fill = as.factor(.data[[target]]))) +
+        geom_histogram(position = "identity", alpha = 0.5, bins = 30) +
+        labs(title = paste(type, "Histogram of", feature, "by", target),
+             x = feature, y = "Count") +
+        theme_minimal()
+    )
+  }
+}
+
+numericDist(clean.train_df, numeric_features, target)
+```
+
+The numeric features do not follow a normal distribution, although they do not exhibit significant skewness either. We will apply log and square root transformations to assess whether these can improve the distributional properties of the data.
+
+
+```{r log, fig.align='default', fig.dim=c(4,2)}
+# create df for log transformed num feat for easy viewing 
+df_log <- rf_df %>%
+  mutate(across(all_of(numeric_features), ~ log(.x + 1)))
+
+# view dist
+numericDist(df_log, numeric_features, target, "Log")
+```
+
+The log transformation causes the overall distribution of the data to become left-skewed. In this case, the original data exhibits a better distribution.
+
+```{r sqrt, fig.align='default', fig.dim=c(4,2)}
+# create df for sqrt transformed num feat for easy viewing 
+df_sqrt <- rf_df %>%
+  mutate(across(all_of(numeric_features), ~ sqrt(.x)))
+
+# view dist
+numericDist(df_log, numeric_features, target, "Sqrt")
+```
+
+The square root transformation also results in a left-skewed distribution. Therefore, the original data provides the best distribution and will be used for training the logistic regression model.
+
+##### Categorical Features
+```{r cat, fig.align='default', fig.dim=c(4,2)}
+cat_features <- names(rf_df)[sapply(rf_df, is.factor) & names(rf_df) != target]  # cat feats have been factorized in rf_df, making them easy to call on
+# Plot categorical features using bar plots (grouped by class label)
+catDist <- function (df, cat_features, target){
+  for (feature in cat_features) {
+    print(
+      ggplot(df, aes(x = .data[[feature]], fill = as.factor(.data[[target]]))) +
+        geom_bar(position = "dodge") +
+        labs(title = paste("Bar Plot of", feature, "by", target),
+             x = feature, y = "Count") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    )
+  }
+}
+
+catDist(clean.train_df, cat_features, target)
+```
+
+The visualization of the distribution of categorical features helps identify which features are binary and which are multi-class. This information is useful for choosing appropriate encoding strategies. Additionally, these visualizations can reveal categorical features that show strong relationships with the target variable.
+
+#### Encoding Categorical Features
+The only categorical feature requiring encoding is `EducationalLevel.` Since it contains only four classes, I will use one-hot encoding. This will result in three new binary columns (n−1), representing "College", "High School", and "Post-Graduate". A value of 1 in any of these columns indicates that the individual belongs to that educational level. If all three columns are 0, the individual falls into the reference category: "None".
+```{r OneHotE}
+# create a new df for logistic regression training
+logR_df <- clean.train_df %>%
+  mutate(College = ifelse(EducationLevel == "College", 1, 0),
+         HighSchool = ifelse(EducationLevel == "High School", 1, 0),
+         PostGraduate = ifelse(EducationLevel == "Post-Graduate", 1, 0)) %>%
+  select(-EducationLevel) #remove original column for training purposes
+
+str(logR_df)
+```
+All categorical features originally represented as character strings have been successfully encoded. As a result, the dataset now contains only numeric variables, making it suitable for logistic regression modeling.
+
+#### Multicollinearity
+ Multicollinearity occurs when two or more features are highly correlated, which can distort the estimated coefficients in a logistic regression model and reduce interpretability. By resolving multicollinearity, we help ensure that the model remains stable, avoids redundancy, and yields interpretable results.
+```{r multicol}
+cor(clean.train_df[,numeric_features])
+```
+There does not seem to be any multicollinearity observed in the numeric data.
+
+### Split Data
+Before training and building our models, we first split the data into training and testing sets, allocating 80% for training and 20% for testing. To ensure reproducibility, we set a random seed prior to performing the split. We used stratified sampling to partition the dataset, preserving the original proportion of class labels (e.g., "0" and "1") in both training and testing sets. This approach helps prevent class imbalance issues and ensures consistent model evaluation.
+
+Since we plan to build a heterogeneous ensemble consisting of a random forest and a homogeneous logistic regression ensemble, both models will be evaluated on the same test set. For the logistic regression ensemble, we will use the remaining 80% training data to create multiple, different but equally sized training subsets. 
+
+#### Random Forest
+```{r rf_split}
+set.seed(2025)
+
+# Create training index
+# 80 for training and 20 for target
+train_index <- createDataPartition(rf_df$Diagnosis, p = 0.8, list = F)
+
+train.rf_df <- rf_df[train_index,]
+test.rf_df <- rf_df[-train_index,]
+```
+
+```{r rf_prop}
+# original
+rf_df.t <- table(rf_df$Diagnosis)
+rf_df.n <- round(rf_df.t[1]/nrow(rf_df)*100,2)
+rf_df.p <- round(rf_df.t[2]/nrow(rf_df)*100,2)
+
+# training set
+train.rf_df.t <- table(train.rf_df$Diagnosis)
+train.rf_df.n <- round(train.rf_df.t[1]/nrow(train.rf_df)*100,2)
+train.rf_df.p <- round(train.rf_df.t[2]/nrow(train.rf_df)*100,2)
+
+# testing set
+test.rf_df.t <- table(test.rf_df$Diagnosis)
+test.rf_df.n <- round(test.rf_df.t[1]/nrow(test.rf_df)*100,2)
+test.rf_df.p <- round(test.rf_df.t[2]/nrow(test.rf_df)*100,2)
+```
+Within the original data set, **`r rf_df.n`%** of the data was classified as no for the target variable, while **`r rf_df.p`%** of the data was classified as yes. This class distribution is similarly reflected in the training and test sets, where the proportion of no cases is **`r train.rf_df.n`%** and **`r test.rf_df.n`%**, respectively. 
+
+#### Logistic Regression
+We first partitioned the dataset using the same training indices as used for the random forest, ensuring that both models share an identical testing set. From the training data, we created five bootstrapped subsets, allowing us to train multiple models on different resampled data. This approach helps reduce variance and provides robustness to class imbalances during model training.
+```{r logRsplit1}
+train.logR_df <- logR_df[train_index,] # training set needs to split again later
+test.logR_df <- logR_df[-train_index,] # should have the same data as test.rf_df
+
+# 5 partitions for 5 subsets
+n.partitions <- 5
+
+# Create lists to hold partitions
+partitions <- list()
+oob <- list()
+
+# generate partitions with replacement
+for (i in 1:n.partitions){
+  sampled_index <- sample(1:nrow(train.logR_df),
+                          size = round(nrow(train.logR_df)*0.8), # use a smaller sample size to allow for more diversity
+                          replace = T)
+  partitions[[i]] <- train.logR_df[sampled_index,]
+  oob[[i]] <- train.logR_df[-sampled_index,]
+}
+
+```
+
+## Models
+Before creating our heterogeneous ensemble function, we will first create and train the random forest and homogeneous logistic regression models. 
+
+### Random Forest
+#### Training
+```{r train_rf}
+rf_model <- randomForest(Diagnosis ~.,
+                         data = train.rf_df,
+                         importance = T)
+
+
+```
+
+#### Evaluation
+The Out-of-Bag (OOB) estimate of error rate for the random forest model is `r round(rf_model$err.rate[100, "OOB"],2)`. This relatively low error rate suggests that the model generalizes well on unseen data. To further assess the model’s performance, I used it to predict the test set and calculated key evaluation metrics: accuracy, precision, recall, F1-score, and AUC. These metrics provide a more comprehensive view of the model’s classification performance. 
+
+##### Evaluation
+```{r predictrf}
+# Predict probabilities for each class
+rf_pprob <- predict(rf_model, test.rf_df, type = "prob")
+
+# Convert pos class probabilities to class predictions with 0.5 threshold
+rf_predicted <- ifelse(rf_pprob[, "1"] > 0.5, 1, 0)
+```
+
+```{r metrics_rf}
+# create function to calc key metrics. Easy to call later
+key_metrics <- function(predicted, actual){
+  # Build confusion matrix
+  confmat <- table(Predicted = predicted, Actual = actual)
+  
+  # get values
+  TN <- confmat[1,1]
+  TP <- confmat[2,2]
+  FN <- confmat[1,2]
+  FP <- confmat[2,1]
+  
+  # calculate
+  o_acc <- round((TP + TN)/sum(confmat)*100,2)
+  TPR <- round(TP / (TP + FN)*100,2)  # Sensitivity
+  TNR <- round(TN / (TN + FP)*100,2) # Specificity
+  Precision <- round(TP / (TP + FP)*100,2)
+  F1 <- round(2 * Precision * TPR / (Precision + TPR),2)
+  
+  
+  # calculate accuracy, TPR, and TNR and display in table
+  accuracy <- tibble(
+    'Overall Accuracy (%)' = o_acc,
+    'True Positive Rate (%)' = TPR,
+    'True Negative Rate (%)' = TNR,
+    'Precision (%)' = Precision,
+    'F1-score (%)' = F1
+  )
+  
+  return(accuracy)
+}
+
+rf_km <- key_metrics(rf_predicted, test.rf_df$Diagnosis)
+kable(rf_km) %>% kable_styling()
+```
+Overall, the random forest achieves extremely high accuracy along with strong positive and negative predictive performance. The true negative rate (specificity) is slightly lower at `r rf_km$'True Negative Rate (%)'`%, but it remains relatively high. Furthermore, the F1-score of `r rf_km$'F1-score (%)'`% indicates that the model effectively handles class imbalances. Given the strong performance across key metrics, I do not plan on tuning the random forest further.
+
+### Logistic Regression
+#### Training
+To build the homogeneous logistic regression ensemble on the five subsets, I will first train a single logistic regression model on one representative subset and perform stepwise backward elimination. This allows me to identify statistically significant features, which will then be used to train the models on the remaining subsets.
+```{r stepwise}
+stepwise_backwards <- function(data, target, threshold){
+  # start with previous_many removed
+  formula <- paste(target, "~ .")
+  model <- glm(as.formula(formula), family = binomial(link = "logit"), data = data)
+  
+  # Loop until all p-values <= threshold
+  repeat {
+    p_values <- summary(model)$coefficients[-1, 4]  # exclude intercept
+    max_p <- max(p_values)
+    
+    if (max_p <= threshold) {
+      break
+    }
+    
+    # Find the predictor with max p-value
+    remove_var <- names(which.max(p_values))
+    
+    # Update formula by removing this variable
+    formula <- paste(formula, " -", remove_var)
+    
+    # Refit model
+    model <- glm(as.formula(formula), family = binomial(link = "logit"), data = data)
+  }
+  
+  return(model)
+}
+
+# Usage:
+logR_model <- stepwise_backwards(train.logR_df, "Diagnosis", 0.05)
+summary(logR_model)
+```
+The features that are statistically significant are `Age`, `Depression`, `UPDRS`, `MoCA`, `FunctionalAssessment`, `Tremor`, `Rigidity`, `Bradykinesia`, and `PosturalInstability`. We will use these features to build the homogeneous ensemble.
+
+```{r logRtrain}
+# create list for trained model storage
+models_v1 <- list()
+
+# iterate through the folds created and train each one (store models in list)
+for(i in 1:length(partitions)){
+  train.data <- partitions[[i]]
+  model <- glm(Diagnosis ~ Age + Depression + UPDRS + MoCA + FunctionalAssessment + Tremor + Rigidity + Bradykinesia + PosturalInstability, family = binomial(link = "logit"), data = train.data)
+  models_v1[[i]] <- model
+}
+
+```
+
+Now that we have trained all 5 subsets, we will use the models to create the homogeneous ensemble. 
+
+```{r logR_ensemble}
+logR_ensemble <- function(models, new.data){
+  # Predict with each model and store results in a matrix
+  predictions <- sapply(models, function(model) {
+    predict(model, newdata = new.data, type = "response")
+  })
+
+  # If only one row in new.data, predictions will be a vector; convert to matrix
+  if (is.vector(predictions)) {
+    predictions <- matrix(predictions, nrow = 1)
+  }
+
+  # Row-wise average of predictions
+  avg_pprob <- rowMeans(predictions)
+  
+  # Return converted pos class probabilities to class predictions with 0.5 threshold
+  return(avg_pprob)
+}
+  
+```
+
+
+#### Evaluation
+We will now evaluate the homogeneous logistic regression model we have created using the key metrics we used before: accuracy, true positive rate, true negative rate, precision, and F1 score. 
+```{r predictLogR}
+logR_pprob <- logR_ensemble(models_v1, test.logR_df)
+logR_predict <- ifelse(logR_pprob > 0.5, 1, 0)
+```
+
+```{r metrics_LogR}
+logR_km <- key_metrics(logR_predict, test.logR_df$Diagnosis)
+kable(logR_km) %>% kable_styling()
+```
+The logistic regression ensemble has a decent overall accuracy and a strong true positive rate. The high recall and F1-score suggest that the model is effective at detecting the positive class. However, it struggles somewhat with identifying the negative class, which may be attributed to the class imbalance present in the data.
+
+Since the initial logistic regression ensemble was trained using features selected from stepwise backward elimination on a single subset, it's possible that feature importance varied across other subsets. To address this, I applied stepwise backward elimination individually to each subset to account for potential variability and to evaluate whether this would lead to performance improvements.
+```{r logstep}
+models_v2 <- list()
+
+for(i in 1:length(partitions)){
+  train.data <- partitions[[i]]
+  model <- stepwise_backwards(train.data, "Diagnosis", 0.05)
+  models_v2[[i]] <- model
+}
+
+# logR predictions 
+logR_pprob2 <- logR_ensemble(models_v2, test.logR_df)
+logR_predict2 <- ifelse(logR_pprob2 > 0.5, 1, 0)
+
+# key metrics
+logR_km2 <- key_metrics(logR_predict2, test.logR_df$Diagnosis)
+
+# Display key metrics for different logistic regression models
+logR_combined <- bind_rows(logR_km, logR_km2) %>%
+  mutate(Version = c("1", "2")) %>%
+  select(Version, everything())
+kable(logR_combined, caption="Key Metrics")%>%
+  kable_styling()
+```
+Overall, the second logistic regression model—trained using stepwise backward elimination across all models—demonstrated stronger balanced performance. Although it has a slightly lower true negative rate, prioritizing the correct prediction of positive diagnoses is more critical. Therefore, we will select the second logistic regression model for inclusion in the ensemble.
+
+### Ensemble
+```{r ensemblefunc}
+ensemble <- function(rf, logR, rf_test, logR_test){
+  # Predict probabilities for each class
+  rf_pprob <- predict(rf, rf_test, type = "prob")
+  logR_pprob <- logR_ensemble(logR, logR_test)
+  
+  # Combine into a matrix to calculate row-wise mean
+  ## we only want the positive class of the rf prediction
+  combined_probs <- cbind(rf_pprob[,"1"], logR_pprob)
+  avg_pprob <- rowMeans(combined_probs)
+  
+  prediction <- ifelse(avg_pprob > 0.5, 1, 0)
+  
+  return(prediction)
+}
+```
+
+
+#### Evaluation
+```{r evalEnsemble}
+# Make ensemble prediction
+ensemble_predict <- ensemble(rf_model, models_v2, test.rf_df, test.logR_df)
+
+# Calculate key metrics
+ensemble_km <- key_metrics(ensemble_predict, test.logR_df$Diagnosis) # The diagnosis is the same for both test sets
+
+# Display table
+combined_km <- bind_rows(rf_km, logR_km, ensemble_km) %>%
+  mutate(Model = c("Random Forest", "Logistic Regression Ensemble", "Ensemble")) %>%
+  select(Model, everything())
+kable(combined_km, caption="Key Metrics")%>%
+  kable_styling()
+```
+Overall, the ensemble model performed very well, achieving key metric values comparable to those of the individual random forest model. However, the random forest still slightly outperformed the ensemble across most metrics. As a result, we will modify the ensemble to assign greater weight to the random forest predictions, given its stronger individual performance.
+
+#### Tuning
+```{r weightedens}
+weighted_ensemble <- function(rf, logR, rf_test, logR_test, weight){
+  # Predict probabilities for each class
+  rf_pprob <- predict(rf, rf_test, type = "prob")
+  logR_pprob <- logR_ensemble(logR, logR_test)
+  
+  # Weighted average: 70% RF, 30% logistic regression
+  avg_pprob <- weight * rf_pprob[,"1"] + (1-weight) * logR_pprob
+  
+  prediction <- ifelse(avg_pprob > 0.5, 1, 0)
+  
+  return(prediction)
+}
+```
+
+```{r weightedpred}
+weights <- c(0.6, 0.7, 0.8, 0.9)
+weighted_results <- lapply(weights, function(w) {
+  prediction <- weighted_ensemble(rf_model, models_v2, test.rf_df, test.logR_df, w)
+  metrics <- key_metrics(prediction, test.logR_df$Diagnosis)
+  metrics$Model <- "Weighted Ensemble"
+  metrics$Weight <- w
+  return(metrics)
+})
+
+
+# display weighted ensemble vs other models
+combined<- bind_rows(combined_km, weighted_results) %>%
+  select(Model, Weight, everything()) %>%
+  rename("Random Forest Weight" = Weight)
+kable(combined, caption="Key Metrics")%>%
+  kable_styling()
+
+```
+Adding weight to the random forest model improved the ensemble's overall performance. The weighted ensemble outperformed the individual random forest model. A weight of 0.8 for the random forest model, resulted in the highest overall accuracy, true positive rate, and F1-score. This indicates that the model was well balanced and was best at minimizing false negatives and avoiding missed diagnoses. Therefore, the ensemble model with a random forest weight of 0.8 is the most preferable version.
+
+## Model Validation 
+#### Read Validation Data Set
+```{r LoadValSet}
+val_url <- "https://s3.us-east-2.amazonaws.com/artificium.us/datasets/parkinsons-diagnostic-validation-100.csv"
+
+val_df <- read.csv(val_url, stringsAsFactors = F, header = T)
+
+```
+
+#### Validation Data Prep
+Before predicting the diagnosis for the validation set, we must preprocess the data using the same transformations applied to the training sets to ensure consistency in the ensemble model.
+```{r prep_val}
+# remove the same columns as in training dataset prep
+clean.val_df <- val_df %>%
+  select(-Ethnicity, -PatientID, -Gender) 
+
+# factorize categorical features for rf
+val.rf_df <- clean.val_df %>%
+  mutate(across(c(EducationLevel, Smoking,
+                  FamilyHistoryParkinsons, TraumaticBrainInjury,
+                  Hypertension, Diabetes, Depression, Stroke, Tremor,
+                  Rigidity, Bradykinesia, PosturalInstability, 
+                  SpeechProblems, SleepDisorders, Constipation), 
+                as.factor))
+
+# encode categorical for logistic regression
+val.logR_df <- clean.val_df %>%
+  mutate(College = ifelse(EducationLevel == "College", 1, 0),
+         HighSchool = ifelse(EducationLevel == "High School", 1, 0),
+         PostGraduate = ifelse(EducationLevel == "Post-Graduate", 1, 0)) %>%
+  select(-EducationLevel)
+
+```
+
+
+
+#### Predict Validation Set
+We will apply the weighted ensemble model to predict the diagnosis in the validation set, using a weight of 0.8 for the random forest component based on prior performance.
+
+```{r predict_val}
+pred_val <- weighted_ensemble(rf_model, models_v2, val.rf_df, val.logR_df, 0.8)
+```
+
+#### Save Predicted Diagnosis to CSV
+Now that we have predicted the diagnoses for the patients, we can combine these predictions with the `PatientID`, sort the patients accordingly, and save the results into a CSV file named **ChowZ.Predictions.csv**.
+```{r csv}
+save_df <- val_df %>%
+  mutate(Diagnosis = pred_val) %>%
+  select(PatientID, Diagnosis) %>%
+  arrange(PatientID)
+
+write.csv(save_df, "Parkinsons.Predictions.csv", row.names = FALSE)
+```
+
