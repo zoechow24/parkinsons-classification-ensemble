@@ -571,7 +571,7 @@ pred_val <- weighted_ensemble(rf_model, models_v2, val.rf_df, val.logR_df, 0.8)
 ```
 
 #### Save Predicted Diagnosis to CSV
-Now that we have predicted the diagnoses for the patients, we can combine these predictions with the `PatientID`, sort the patients accordingly, and save the results into a CSV file named **ChowZ.Predictions.csv**.
+Now that we have predicted the diagnoses for the patients, we can combine these predictions with the `PatientID`, sort the patients accordingly, and save the results into a CSV file named **Parkinsons.Predictions.csv**.
 ```{r csv}
 save_df <- val_df %>%
   mutate(Diagnosis = pred_val) %>%
