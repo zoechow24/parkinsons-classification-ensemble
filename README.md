@@ -51,13 +51,4 @@ This project uses the following packages:
 The final predictions were saved in the  `Parkinsons.Predictions.csv` file which consists of the _PatientID_ and _Diagnosis_. The models are evaluated using Overall Accuracy, True Positive Rate, True Negative Rate, Precision, and F1-score. The full analysis and report could be found [here](https://zoechow24.github.io/parkinsons-classification-ensemble/Parkinson_Classification.html). 
 
 
-
-
-
-
-
-
-
-
-
    
