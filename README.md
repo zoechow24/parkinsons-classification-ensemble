@@ -14,6 +14,15 @@ The following data was provided and was loaded using their URLs:
 * `Parkinson_Classification.html` - knitted HTML report
 * `Parkinsons.Predictions.csv` - predictions for the validation set
 
+## Dependencies
+This project uses the following packages:
+* dplyr
+* ggplot2
+* kableExtra
+* knitr
+* caret
+* randomForest
+
 ## Methodology
 1. Load Data
 2. Explore Data
@@ -22,7 +31,7 @@ The following data was provided and was loaded using their URLs:
    * Perform transformations for Random Forest model
    * Perform transformations for Logistic Regression model
    * Handle outliers
-   * Visiualize and handle distribution
+   * Visualize and handle distribution
    * Encode categorical variables
    * Multicollinearity
 4. Random Forest Model
@@ -38,8 +47,8 @@ The following data was provided and was loaded using their URLs:
    * Prepare validation set
    * Predict validation set
 
-  ## Results
-  The final predictions were saved in the  `Parkinsons.Predictions.csv` file which consists of the _PatientID_ and _Diagnosis_. The full analysis and report could be found [here](https://zoechow24.github.io/parkinsons-classification-ensemble/Parkinson_Classification.html).
+## Results
+The final predictions were saved in the  `Parkinsons.Predictions.csv` file which consists of the _PatientID_ and _Diagnosis_. The models are evaluated using Overall Accuracy, True Positive Rate, True Negative Rate, Precision, and F1-score. The full analysis and report could be found [here](https://zoechow24.github.io/parkinsons-classification-ensemble/Parkinson_Classification.html). 
 
 
 
